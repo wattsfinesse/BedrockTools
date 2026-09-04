@@ -43,6 +43,8 @@
 #include "player/autogg.hpp"
 #include "misc/hiveutils.hpp"
 #include "visual/swingmodifier.hpp"
+#include "visual/xray.hpp"
+#include "visual/freelook.hpp"
 
 ModuleRegistry& ModuleRegistry::get() {
     static ModuleRegistry registry;
@@ -128,5 +130,7 @@ void registerAllModules() {
     registry.emplace<LightOverlayModule>();
     registry.emplace<ShulkerPreviewModule>();
     registry.emplace<ConnectedGlassModule>();
+    registry.emplace<XrayModule>();
+    registry.emplace<FreeLookModule>();
     registry.emplace<ForceGlobalRPModule>();
 }
