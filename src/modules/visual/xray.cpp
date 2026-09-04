@@ -2,6 +2,8 @@
 #include <bedrocktools/memory/Signatures.hpp>
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/sdk/Memory.hpp>
+#include <bedrocktools/sdk/Types.hpp>
+#include <bedrocktools/sdk/render/Block.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
