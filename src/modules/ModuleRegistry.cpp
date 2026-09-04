@@ -10,12 +10,14 @@
 #include "hud/worldtime.hpp"
 #include "hud/totemcounter.hpp"
 #include "hud/arrowcounter.hpp"
+#include "hud/potcounter.hpp"
 #include "player/quickloot.hpp"
 #include "hud/reachcounter.hpp"
 #include "hud/breakindicator.hpp"
 #include "hud/playercoords.hpp"
 #include "hud/compass.hpp"
 #include "hud/armorhud.hpp"
+#include "hud/potionhud.hpp"
 #include "player/timechanger.hpp"
 #include "player/autosprint.hpp"
 #include "player/weatherchanger.hpp"
@@ -35,6 +37,7 @@
 #include "visual/chunkborder.hpp"
 #include "visual/hitbox.hpp"
 #include "visual/zoom.hpp"
+#include "visual/cinematiccamera.hpp"
 #include "visual/breadcrumbs.hpp"
 #include "visual/lightoverlay.hpp"
 #include "visual/shulkerpreview.hpp"
@@ -101,10 +104,12 @@ void registerAllModules() {
     registry.emplace<PlayerCoordsModule>();
     registry.emplace<CompassModule>();
     registry.emplace<ArmorHudModule>();
+    registry.emplace<PotionHudModule>();
     registry.emplace<TimeChangerModule>();
     registry.emplace<WorldTimeModule>();
     registry.emplace<TotemCounterModule>();
     registry.emplace<ArrowCounterModule>();
+    registry.emplace<PotCounterModule>();
     registry.emplace<QuickLootModule>();
     registry.emplace<AutoSprintModule>();
     registry.emplace<WeatherChangerModule>();
@@ -123,6 +128,7 @@ void registerAllModules() {
     registry.emplace<ChunkBorderModule>();
     registry.emplace<HitboxModule>();
     registry.emplace<ZoomModule>();
+    registry.emplace<CinematicCameraModule>();
     registry.emplace<BreadcrumbsModule>();
     registry.emplace<SkinStealerModule>();
     registry.emplace<AutoGG>();
