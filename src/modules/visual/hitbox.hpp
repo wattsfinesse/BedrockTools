@@ -31,6 +31,8 @@ public:
     uint32_t espColor = 0xFF00FF00;
 
     bool expandHitbox = false;
+    // Apollon uses hitBoxValue as the target width. hitboxWidth remains for compatibility.
+    float hitBoxValue = 1.5f;
     float hitboxWidth = 1.5f;
 
     uint32_t hitboxColor = 0xFFFFFFFF;   

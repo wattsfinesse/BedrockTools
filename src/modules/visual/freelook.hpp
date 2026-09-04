@@ -1,5 +1,4 @@
 #pragma once
-
 #include "../Module.hpp"
 
 class FreeLookModule : public Module {
@@ -13,8 +12,6 @@ public:
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
 
-    float lockPitch = 0.0f;
-    float lockYaw = 0.0f;
     bool restoreOnDisable = true;
 
 private:

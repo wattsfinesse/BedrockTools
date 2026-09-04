@@ -1,4 +1,5 @@
 #include "hitbox.hpp"
+#include "esp.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/sdk/Memory.hpp>
@@ -208,7 +209,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         _renderLevel_orig(_this, screenContext, a3);
     }
 
-    if (!g_hitboxMod || (!g_hitboxMod->enabled && !g_hitboxMod->showESP)) return;
+    auto* esp = getESPModule();
+    if (!g_hitboxMod || (!g_hitboxMod->enabled && !(esp && esp->enabled))) return;
     if (!g_localPlayerPtr) return;
     if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) return;
     if (!screenContext || (uintptr_t)screenContext < 0x1000) return;
@@ -318,10 +320,10 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
 
         if (g_hitboxMod->enabled) drawBox(aabb, g_hitboxMod->hitboxColor);
-        if (g_hitboxMod->showESP && distance <= g_hitboxMod->espRange) {
-            if (g_hitboxMod->espBox) drawBox(aabb, g_hitboxMod->espColor);
-            if (g_hitboxMod->espLine) {
-                drawLines({{g_playerPos, bedrocktools::sdk::Vec3{centerX, centerY, centerZ}}}, g_hitboxMod->espColor);
+        if (esp && esp->enabled && isPlayer && distance <= esp->range) {
+            if (esp->box) drawBox(aabb, esp->color);
+            if (esp->tracers) {
+                drawLines({{g_playerPos, bedrocktools::sdk::Vec3{centerX, centerY, centerZ}}}, esp->color);
             }
         }
 
@@ -386,11 +388,11 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                     isPlayer = s_actorIsPlayer(ent);
                 }
 
-                if (isPlayer && !g_hitboxMod->showPlayers && !g_hitboxMod->showESP) continue;
+                if (isPlayer && !(g_hitboxMod->enabled && g_hitboxMod->showPlayers) && !(esp && esp->enabled)) continue;
 
                 if (!isPlayer && (!g_hitboxMod->showEntities || !hasCategory(ent, 2) || !g_hitboxMod->enabled)) continue;
 
-                if (s_actorIsInvisible && s_actorIsInvisible(ent)) continue;
+                if (s_actorIsInvisible && s_actorIsInvisible(ent) && !(esp && esp->enabled && !esp->ignoreInvisible)) continue;
 
                 renderActor(ent);
             }
@@ -494,7 +496,8 @@ void HitboxModule::onFrame() {
     ActorVec actors = s_actorFetchNearby(g_localPlayerPtr, &extent, 1);
     if (!actors.begin || !actors.end) return;
 
-    const float width = std::clamp(hitboxWidth, 0.6f, 10.0f);
+    const float width = std::clamp(hitBoxValue, 0.6f, 10.0f);
+    hitboxWidth = hitBoxValue;
     for (DistanceSortedActor* it = actors.begin; it < actors.end; ++it) {
         void* actor = it->mActor;
         if (!actor || actor == g_localPlayerPtr || !s_actorIsPlayer(actor)) continue;
@@ -534,7 +537,9 @@ void HitboxModule::loadConfig(const nlohmann::json& j) {
     espBox = j.value("espBox", espBox);
     espLine = j.value("espLine", espLine);
     espRange = j.value("espRange", espRange);
-    hitboxWidth = j.value("hitboxWidth", hitboxWidth);
+    hitBoxValue = j.value("hitBoxValue", hitBoxValue);
+    hitboxWidth = j.value("hitboxWidth", hitBoxValue);
+    hitBoxValue = hitboxWidth;
     expandHitbox = j.value("expandHitbox", expandHitbox);
 
     auto parseColor = [&](const std::string& key, uint32_t& outColor) {
@@ -564,7 +569,8 @@ void HitboxModule::saveConfig(nlohmann::json& j) {
     j["espBox"] = espBox;
     j["espLine"] = espLine;
     j["espRange"] = espRange;
-    j["hitboxWidth"] = hitboxWidth;
+    j["hitBoxValue"] = hitBoxValue;
+    j["hitboxWidth"] = hitBoxValue;
     j["expandHitbox"] = expandHitbox;
 
     char hexH[12], hexE[12], hexL[12];

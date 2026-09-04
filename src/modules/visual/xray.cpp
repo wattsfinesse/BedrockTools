@@ -1,186 +1,140 @@
 #include "xray.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
 #include "core/memory/Hooks.hpp"
-#include <bedrocktools/sdk/Memory.hpp>
 #include <bedrocktools/sdk/Types.hpp>
 #include <bedrocktools/sdk/render/Block.hpp>
-#include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
+#include <bedrocktools/sdk/Memory.hpp>
 #include <atomic>
-#include <cctype>
 #include <array>
 #include <string>
 #include <algorithm>
+#include <cctype>
 
 namespace {
-using Vec3Raw = bedrocktools::sdk::Vec3;
-using BlockPosRaw = bedrocktools::sdk::BlockPos;
-using FaceFn = void(*)(void*, void*, const void*, const Vec3Raw*, const void*);
+using namespace bedrocktools;
+using Vec3 = sdk::Vec3;
 
+struct FaceHook { hooks::Handle handle{}; void (*original)(void*, void*, const void*, const Vec3*, const void*){}; };
+std::array<FaceHook, 6> g_faces{};
+XrayModule* g_xray = nullptr;
 std::atomic<bool> g_enabled{false};
-XrayModule* g_module = nullptr;
-using SetAllDirtyFn = void(*)(void*, bool, bool);
-SetAllDirtyFn g_setAllDirty = nullptr;
-std::atomic<bool> g_rebuildPending{false};
+std::atomic<bool> g_rebuild{false};
+using DirtyFn = void(*)(void*, bool, bool);
+DirtyFn g_setAllDirty = nullptr;
 
-struct FaceHook { bedrocktools::hooks::Handle handle = nullptr; FaceFn original = nullptr; };
-std::array<FaceHook, 6> g_hooks{};
+constexpr std::array<memory::SignatureId, 6> kFaces = {
+    memory::SignatureId::BlockTessellatorTessellateFaceDown,
+    memory::SignatureId::BlockTessellatorTessellateFaceUp,
+    memory::SignatureId::BlockTessellatorTessellateFaceNorth,
+    memory::SignatureId::BlockTessellatorTessellateFaceSouth,
+    memory::SignatureId::BlockTessellatorTessellateFaceWest,
+    memory::SignatureId::BlockTessellatorTessellateFaceEast,
+};
 
-static bool isOre(const std::string& raw) {
-    std::string name = raw;
-    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+static std::string lower(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return (char)std::tolower(c); });
+    return s;
+}
 
-    if (name.find("diamond") != std::string::npos) return g_module && g_module->diamond;
-    if (name.find("emerald") != std::string::npos) return g_module && g_module->emerald;
-    if (name.find("gold_ore") != std::string::npos || name.find("deepslate_gold") != std::string::npos) return g_module && g_module->gold;
-    if (name.find("iron_ore") != std::string::npos || name.find("deepslate_iron") != std::string::npos) return g_module && g_module->iron;
-    if (name.find("copper_ore") != std::string::npos || name.find("deepslate_copper") != std::string::npos) return g_module && g_module->copper;
-    if (name.find("coal_ore") != std::string::npos || name.find("deepslate_coal") != std::string::npos) return g_module && g_module->coal;
-    if (name.find("redstone_ore") != std::string::npos || name.find("deepslate_redstone") != std::string::npos) return g_module && g_module->redstone;
-    if (name.find("lapis_ore") != std::string::npos || name.find("deepslate_lapis") != std::string::npos) return g_module && g_module->lapis;
-    if (name.find("nether_quartz") != std::string::npos) return g_module && g_module->quartz;
-    if (name.find("ancient_debris") != std::string::npos) return g_module && g_module->ancientDebris;
-    if (name.find("amethyst") != std::string::npos) return g_module && g_module->amethyst;
-    if (name == "minecraft:obsidian" || name == "obsidian") return g_module && g_module->obsidian;
+static bool selected(const std::string& raw) {
+    if (!g_xray) return false;
+    const std::string n = lower(raw);
+    if (n.find("diamond") != std::string::npos) return g_xray->diamond;
+    if (n.find("iron_ore") != std::string::npos || n.find("deepslate_iron") != std::string::npos) return g_xray->iron;
+    if (n.find("gold_ore") != std::string::npos || n.find("deepslate_gold") != std::string::npos || n.find("nether_gold") != std::string::npos) return g_xray->gold;
+    if (n.find("coal_ore") != std::string::npos || n.find("deepslate_coal") != std::string::npos) return g_xray->coal;
+    if (n.find("copper_ore") != std::string::npos || n.find("deepslate_copper") != std::string::npos) return g_xray->copper;
+    if (n.find("lapis_ore") != std::string::npos || n.find("deepslate_lapis") != std::string::npos) return g_xray->lapis;
+    if (n.find("emerald") != std::string::npos) return g_xray->emerald;
+    if (n.find("redstone_ore") != std::string::npos || n.find("deepslate_redstone") != std::string::npos) return g_xray->redstone;
+    if (n.find("amethyst") != std::string::npos) return g_xray->amethyst;
+    if (n.find("ancient_debris") != std::string::npos || n.find("netherite_block") != std::string::npos) return g_xray->netherite;
+    if (n.find("quartz") != std::string::npos) return g_xray->quartz;
+    if (n == "minecraft:obsidian" || n == "tile.obsidian" || n == "obsidian") return g_xray->obsidian;
+    if (n.find("barrel") != std::string::npos) return g_xray->barrel;
     return false;
 }
 
-static bool shouldRender(const void* block) {
+static bool renderable(const void* block) {
     if (!block) return false;
-    const auto* b = reinterpret_cast<const bedrocktools::sdk::Block*>(block);
-    const auto* fullName = b->fullName();
-    if (!fullName || fullName->empty()) return false;
-    return isOre(*fullName);
+    const auto* b = reinterpret_cast<const sdk::Block*>(block);
+    const auto* name = b->fullName();
+    return name && !name->empty() && selected(*name);
 }
 
 template <size_t I>
-void faceHook(void* a0, void* a1, const void* block, const Vec3Raw* pos, const void* tex) {
-    auto& hook = g_hooks[I];
-    if (!hook.original) return;
-    if (!g_enabled.load(std::memory_order_relaxed)) {
-        hook.original(a0, a1, block, pos, tex);
-        return;
-    }
-    // Only emit selected blocks. This gives the classic ore-through-terrain X-ray effect
-    // using the game's own block tessellation path; it does not alter networking.
-    if (shouldRender(block)) hook.original(a0, a1, block, pos, tex);
+void face(void* a0, void* a1, const void* block, const Vec3* pos, const void* tex) {
+    auto& h = g_faces[I];
+    if (!h.original) return;
+    if (!g_enabled.load(std::memory_order_relaxed) || renderable(block))
+        h.original(a0, a1, block, pos, tex);
 }
 
-constexpr std::array<bedrocktools::memory::SignatureId, 6> kSigIds = {
-    bedrocktools::memory::SignatureId::BlockTessellatorTessellateFaceDown,
-    bedrocktools::memory::SignatureId::BlockTessellatorTessellateFaceUp,
-    bedrocktools::memory::SignatureId::BlockTessellatorTessellateFaceNorth,
-    bedrocktools::memory::SignatureId::BlockTessellatorTessellateFaceSouth,
-    bedrocktools::memory::SignatureId::BlockTessellatorTessellateFaceWest,
-    bedrocktools::memory::SignatureId::BlockTessellatorTessellateFaceEast,
-};
+static void* trampoline(size_t i) {
+    switch(i) {
+        case 0: return (void*)&face<0>;
+        case 1: return (void*)&face<1>;
+        case 2: return (void*)&face<2>;
+        case 3: return (void*)&face<3>;
+        case 4: return (void*)&face<4>;
+        default: return (void*)&face<5>;
+    }
+}
 
-static bool rebuildRenderChunks(void* clientInstance) {
-    if (!clientInstance || !g_setAllDirty) return false;
-    void* levelRenderer = bedrocktools::sdk::field<void*>(clientInstance, bedrocktools::sdk::offsets::ClientInstance::mLevelRenderer);
-    if (!levelRenderer) return false;
-    void* node = bedrocktools::sdk::field<void*>(
-        levelRenderer,
-        bedrocktools::sdk::offsets::LevelRenderer::mRenderChunkCoordinators
-            + bedrocktools::sdk::offsets::HashTable::mFirstNode
-    );
-    bool rebuilt = false;
-    size_t visited = 0;
-    while (node && visited++ < bedrocktools::sdk::offsets::RenderChunkCoordinator::MaxNodes) {
-        void* next = bedrocktools::sdk::field<void*>(node, bedrocktools::sdk::offsets::HashNode::mNext);
-        void* coordinator = bedrocktools::sdk::field<void*>(node, bedrocktools::sdk::offsets::HashNode::mValuePointer);
-        if (coordinator) {
-            g_setAllDirty(coordinator, true, false);
-            rebuilt = true;
-        }
+static void requestRebuild() { g_rebuild.store(true, std::memory_order_release); }
+static void tryRebuild(void* client) {
+    if (!client || !g_setAllDirty) return;
+    // The current BedrockTools offsets expose the coordinator hash table. Marking
+    // every coordinator dirty reproduces the instant refresh used by Apollon.
+    void* renderer = sdk::field<void*>(client, sdk::offsets::ClientInstance::mLevelRenderer);
+    if (!renderer) return;
+    void* node = sdk::field<void*>(renderer, sdk::offsets::LevelRenderer::mRenderChunkCoordinators + sdk::offsets::HashTable::mFirstNode);
+    size_t count = 0;
+    while (node && count++ < sdk::offsets::RenderChunkCoordinator::MaxNodes) {
+        void* next = sdk::field<void*>(node, sdk::offsets::HashNode::mNext);
+        void* coordinator = sdk::field<void*>(node, sdk::offsets::HashNode::mValuePointer);
+        if (coordinator) g_setAllDirty(coordinator, true, false);
         node = next;
     }
-    return rebuilt;
-}
-
-static void* trampolineFor(size_t i) {
-    switch (i) {
-        case 0: return reinterpret_cast<void*>(&faceHook<0>);
-        case 1: return reinterpret_cast<void*>(&faceHook<1>);
-        case 2: return reinterpret_cast<void*>(&faceHook<2>);
-        case 3: return reinterpret_cast<void*>(&faceHook<3>);
-        case 4: return reinterpret_cast<void*>(&faceHook<4>);
-        default: return reinterpret_cast<void*>(&faceHook<5>);
-    }
+    g_rebuild.store(false, std::memory_order_release);
 }
 }
 
-XrayModule::XrayModule() : Module("Xray", "Hides normal terrain during block rendering and keeps selected resources visible.") {
-    showInMenu = true;
-    g_module = this;
-}
-
-XrayModule::~XrayModule() {
-    g_enabled.store(false, std::memory_order_relaxed);
-    if (g_module == this) g_module = nullptr;
-}
-
-void XrayModule::applyConfig() {}
+XrayModule::XrayModule() : Module("Xray", "Apollon-style resource Xray: hides normal terrain and keeps selected resources visible.") { showInMenu = true; g_xray = this; }
+XrayModule::~XrayModule() { g_enabled.store(false); if (g_xray == this) g_xray = nullptr; }
 
 void XrayModule::installHooks() {
     if (m_hooked) return;
-    g_setAllDirty = reinterpret_cast<SetAllDirtyFn>(bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::RenderChunkCoordinatorSetAllDirty));
-    for (size_t i = 0; i < g_hooks.size(); ++i) {
-        const auto address = bedrocktools::memory::resolve(kSigIds[i]);
+    g_setAllDirty = reinterpret_cast<DirtyFn>(memory::resolve(memory::SignatureId::RenderChunkCoordinatorSetAllDirty));
+    size_t ok = 0;
+    for (size_t i = 0; i < g_faces.size(); ++i) {
+        uintptr_t address = memory::resolve(kFaces[i]);
         if (!address) continue;
-        g_hooks[i].handle = bedrocktools::hooks::install(
-            reinterpret_cast<void*>(address), trampolineFor(i), reinterpret_cast<void**>(&g_hooks[i].original));
+        g_faces[i].handle = hooks::install(reinterpret_cast<void*>(address), trampoline(i), reinterpret_cast<void**>(&g_faces[i].original));
+        if (g_faces[i].handle && g_faces[i].original) ++ok;
     }
-    m_hooked = true;
-    for (const auto& h : g_hooks) m_hooked = m_hooked && h.handle && h.original;
+    m_hooked = ok == g_faces.size();
 }
 
 void XrayModule::onInit() {
     installHooks();
-    bedrocktools::events::bus().subscribe<bedrocktools::events::ClientInstanceUpdateEvent>([](auto& event) {
-        if (g_rebuildPending.load(std::memory_order_acquire) && rebuildRenderChunks(event.clientInstance))
-            g_rebuildPending.store(false, std::memory_order_release);
+    events::bus().subscribe<events::ClientInstanceUpdateEvent>([](auto& event){
+        if (g_rebuild.load(std::memory_order_acquire)) tryRebuild(event.clientInstance);
     });
 }
-void XrayModule::onEnable() {
-    applyConfig();
-    installHooks();
-    g_enabled.store(m_hooked, std::memory_order_release);
-    g_rebuildPending.store(m_hooked, std::memory_order_release);
-}
-void XrayModule::onDisable() { g_enabled.store(false, std::memory_order_release); g_rebuildPending.store(true, std::memory_order_release); }
+void XrayModule::onEnable() { installHooks(); g_enabled.store(m_hooked, std::memory_order_release); requestRebuild(); }
+void XrayModule::onDisable() { g_enabled.store(false, std::memory_order_release); requestRebuild(); }
 
 void XrayModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
-    oresOnly = j.value("oresOnly", oresOnly);
-    diamond = j.value("diamond", diamond);
-    emerald = j.value("emerald", emerald);
-    gold = j.value("gold", gold);
-    iron = j.value("iron", iron);
-    copper = j.value("copper", copper);
-    coal = j.value("coal", coal);
-    redstone = j.value("redstone", redstone);
-    lapis = j.value("lapis", lapis);
-    quartz = j.value("quartz", quartz);
-    ancientDebris = j.value("ancientDebris", ancientDebris);
-    amethyst = j.value("amethyst", amethyst);
-    obsidian = j.value("obsidian", obsidian);
+    diamond=j.value("diamond",diamond); iron=j.value("iron",iron); gold=j.value("gold",gold); coal=j.value("coal",coal);
+    copper=j.value("copper",copper); lapis=j.value("lapis",lapis); emerald=j.value("emerald",emerald); redstone=j.value("redstone",redstone);
+    amethyst=j.value("amethyst",amethyst); netherite=j.value("netherite",netherite); quartz=j.value("quartz",quartz); obsidian=j.value("obsidian",obsidian); barrel=j.value("barrel",barrel);
 }
-
 void XrayModule::saveConfig(nlohmann::json& j) {
     Module::saveConfig(j);
-    j["oresOnly"] = oresOnly;
-    j["diamond"] = diamond;
-    j["emerald"] = emerald;
-    j["gold"] = gold;
-    j["iron"] = iron;
-    j["copper"] = copper;
-    j["coal"] = coal;
-    j["redstone"] = redstone;
-    j["lapis"] = lapis;
-    j["quartz"] = quartz;
-    j["ancientDebris"] = ancientDebris;
-    j["amethyst"] = amethyst;
-    j["obsidian"] = obsidian;
+    j["diamond"]=diamond; j["iron"]=iron; j["gold"]=gold; j["coal"]=coal; j["copper"]=copper; j["lapis"]=lapis; j["emerald"]=emerald; j["redstone"]=redstone;
+    j["amethyst"]=amethyst; j["netherite"]=netherite; j["quartz"]=quartz; j["obsidian"]=obsidian; j["barrel"]=barrel;
 }
