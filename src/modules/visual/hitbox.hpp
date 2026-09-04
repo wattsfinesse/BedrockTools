@@ -14,6 +14,7 @@ public:
     void onDisable() override;
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
+    void onFrame() override;
 
     
     bool showEntities = true;
@@ -23,7 +24,15 @@ public:
     bool showLookLine = true;
     float lookLineLength = 2.0f;
 
-    
+    bool showESP = false;
+    bool espBox = true;
+    bool espLine = false;
+    float espRange = 64.0f;
+    uint32_t espColor = 0xFF00FF00;
+
+    bool expandHitbox = false;
+    float hitboxWidth = 1.5f;
+
     uint32_t hitboxColor = 0xFFFFFFFF;   
     uint32_t eyeLineColor = 0xFFFF0000;  
     uint32_t lookLineColor = 0xFF0000FF; 

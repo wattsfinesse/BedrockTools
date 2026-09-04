@@ -9,6 +9,8 @@
 #include <cstring>
 #include <vector>
 #include <utility>
+#include <unordered_map>
+#include <algorithm>
 
 typedef void (*Tessellator_begin_t)(void* tessellator, void* debugCallback, int primitiveMode, int vertexCount, int noIndices);
 typedef void (*Tessellator_color_t)(void* tessellator, float r, float g, float b, float a);
@@ -116,7 +118,6 @@ static uintptr_t resolveADRP(uint32_t* insns, size_t count, uint32_t targetReg) 
 }
 
 static HitboxModule* g_hitboxMod = nullptr;
-
 static Tessellator_begin_t                s_tessBegin = nullptr;
 static Tessellator_color_t                s_tessColor = nullptr;
 static Tessellator_vertex_t               s_tessVertex = nullptr;
@@ -139,6 +140,7 @@ struct AABB {
     bedrocktools::sdk::Vec3 min;
     bedrocktools::sdk::Vec3 max;
 };
+static std::unordered_map<void*, AABB> g_originalAabbs;
 
 static void s_hitboxTickCallback(void* _this) {
     if (!g_hitboxMod || !g_hitboxMod->enabled) return;
@@ -206,7 +208,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         _renderLevel_orig(_this, screenContext, a3);
     }
 
-    if (!g_hitboxMod || !g_hitboxMod->enabled) return;
+    if (!g_hitboxMod || (!g_hitboxMod->enabled && !g_hitboxMod->showESP)) return;
     if (!g_localPlayerPtr) return;
     if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) return;
     if (!screenContext || (uintptr_t)screenContext < 0x1000) return;
@@ -307,9 +309,23 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         if (aabb.min.x == 0.f && aabb.min.y == 0.f && aabb.min.z == 0.f &&
             aabb.max.x == 0.f && aabb.max.y == 0.f && aabb.max.z == 0.f) return;
 
-        drawBox(aabb, g_hitboxMod->hitboxColor);
+        const float centerX = (aabb.min.x + aabb.max.x) * 0.5f;
+        const float centerY = (aabb.min.y + aabb.max.y) * 0.5f;
+        const float centerZ = (aabb.min.z + aabb.max.z) * 0.5f;
+        const float dx = centerX - g_playerPos.x;
+        const float dy = centerY - g_playerPos.y;
+        const float dz = centerZ - g_playerPos.z;
+        const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-        if (g_hitboxMod->showEyeLine) {
+        if (g_hitboxMod->enabled) drawBox(aabb, g_hitboxMod->hitboxColor);
+        if (g_hitboxMod->showESP && distance <= g_hitboxMod->espRange) {
+            if (g_hitboxMod->espBox) drawBox(aabb, g_hitboxMod->espColor);
+            if (g_hitboxMod->espLine) {
+                drawLines({{g_playerPos, bedrocktools::sdk::Vec3{centerX, centerY, centerZ}}}, g_hitboxMod->espColor);
+            }
+        }
+
+        if (g_hitboxMod->showEyeLine && g_hitboxMod->enabled) {
             float minX = aabb.min.x;
             float maxX = aabb.max.x;
             float minZ = aabb.min.z;
@@ -326,7 +342,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             drawLines(eyeLines, g_hitboxMod->eyeLineColor);
         }
 
-        if (g_hitboxMod->showLookLine) {
+        if (g_hitboxMod->showLookLine && g_hitboxMod->enabled) {
             bedrocktools::sdk::Vec2 rot = getActorRotation(ent);
             static constexpr float PI = 3.14159265f;
             static constexpr float DEG_TO_RAD = PI / 180.0f;
@@ -352,7 +368,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         }
     };
 
-    if (g_hitboxMod->showSelf && isThirdPerson) {
+    if (g_hitboxMod->enabled && g_hitboxMod->showSelf && isThirdPerson) {
         renderActor(g_localPlayerPtr);
     }
 
@@ -370,9 +386,9 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                     isPlayer = s_actorIsPlayer(ent);
                 }
 
-                if (isPlayer && !g_hitboxMod->showPlayers) continue;
+                if (isPlayer && !g_hitboxMod->showPlayers && !g_hitboxMod->showESP) continue;
 
-                if (!isPlayer && (!g_hitboxMod->showEntities || !hasCategory(ent, 2))) continue;
+                if (!isPlayer && (!g_hitboxMod->showEntities || !hasCategory(ent, 2) || !g_hitboxMod->enabled)) continue;
 
                 if (s_actorIsInvisible && s_actorIsInvisible(ent)) continue;
 
@@ -402,6 +418,8 @@ HitboxModule::HitboxModule()
 }
 
 HitboxModule::~HitboxModule() {
+    expandHitbox = false;
+    onFrame();
     if (g_hitboxMod == this) g_hitboxMod = nullptr;
 }
 
@@ -458,11 +476,50 @@ void HitboxModule::applyPatch() {
     m_patched = true;
 }
 
+void HitboxModule::onFrame() {
+    if (!expandHitbox) {
+        if (!g_originalAabbs.empty()) {
+            for (auto& [actor, original] : g_originalAabbs) {
+                if (!actor) continue;
+                auto component = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(actor) + bedrocktools::sdk::offsets::Actor::mStateVectorComponent + bedrocktools::sdk::offsets::BuiltInActorComponents::mAABBShapeComponent);
+                if (component) *reinterpret_cast<AABB*>(component + bedrocktools::sdk::offsets::AABBShapeComponent::mAABB) = original;
+            }
+            g_originalAabbs.clear();
+        }
+        return;
+    }
+    if (!g_localPlayerPtr || !s_actorFetchNearby || !s_actorIsPlayer) return;
+
+    bedrocktools::sdk::Vec3 extent = {64.0f, 64.0f, 64.0f};
+    ActorVec actors = s_actorFetchNearby(g_localPlayerPtr, &extent, 1);
+    if (!actors.begin || !actors.end) return;
+
+    const float width = std::clamp(hitboxWidth, 0.6f, 10.0f);
+    for (DistanceSortedActor* it = actors.begin; it < actors.end; ++it) {
+        void* actor = it->mActor;
+        if (!actor || actor == g_localPlayerPtr || !s_actorIsPlayer(actor)) continue;
+
+        auto component = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(actor) + bedrocktools::sdk::offsets::Actor::mStateVectorComponent + bedrocktools::sdk::offsets::BuiltInActorComponents::mAABBShapeComponent);
+        if (!component) continue;
+        auto* box = reinterpret_cast<AABB*>(component + bedrocktools::sdk::offsets::AABBShapeComponent::mAABB);
+        if (g_originalAabbs.find(actor) == g_originalAabbs.end()) g_originalAabbs.emplace(actor, *box);
+
+        const float centerX = (g_originalAabbs[actor].min.x + g_originalAabbs[actor].max.x) * 0.5f;
+        const float centerZ = (g_originalAabbs[actor].min.z + g_originalAabbs[actor].max.z) * 0.5f;
+        box->min.x = centerX - width * 0.5f;
+        box->max.x = centerX + width * 0.5f;
+        box->min.z = centerZ - width * 0.5f;
+        box->max.z = centerZ + width * 0.5f;
+    }
+}
+
 void HitboxModule::onEnable() {
     applyPatch();
 }
 
 void HitboxModule::onDisable() {
+    expandHitbox = false;
+    onFrame();
 }
 
 void HitboxModule::loadConfig(const nlohmann::json& j) {
@@ -473,6 +530,12 @@ void HitboxModule::loadConfig(const nlohmann::json& j) {
     showEyeLine = j.value("showEyeLine", showEyeLine);
     showLookLine = j.value("showLookLine", showLookLine);
     lookLineLength = j.value("lookLineLength", lookLineLength);
+    showESP = j.value("showESP", showESP);
+    espBox = j.value("espBox", espBox);
+    espLine = j.value("espLine", espLine);
+    espRange = j.value("espRange", espRange);
+    hitboxWidth = j.value("hitboxWidth", hitboxWidth);
+    expandHitbox = j.value("expandHitbox", expandHitbox);
 
     auto parseColor = [&](const std::string& key, uint32_t& outColor) {
         if (j.contains(key)) {
@@ -486,6 +549,7 @@ void HitboxModule::loadConfig(const nlohmann::json& j) {
     parseColor("hitboxColor", hitboxColor);
     parseColor("eyeLineColor", eyeLineColor);
     parseColor("lookLineColor", lookLineColor);
+    parseColor("espColor", espColor);
 }
 
 void HitboxModule::saveConfig(nlohmann::json& j) {
@@ -496,6 +560,12 @@ void HitboxModule::saveConfig(nlohmann::json& j) {
     j["showEyeLine"] = showEyeLine;
     j["showLookLine"] = showLookLine;
     j["lookLineLength"] = lookLineLength;
+    j["showESP"] = showESP;
+    j["espBox"] = espBox;
+    j["espLine"] = espLine;
+    j["espRange"] = espRange;
+    j["hitboxWidth"] = hitboxWidth;
+    j["expandHitbox"] = expandHitbox;
 
     char hexH[12], hexE[12], hexL[12];
     snprintf(hexH, sizeof(hexH), "#%08X", hitboxColor);
@@ -505,4 +575,7 @@ void HitboxModule::saveConfig(nlohmann::json& j) {
     j["hitboxColor"] = std::string(hexH);
     j["eyeLineColor"] = std::string(hexE);
     j["lookLineColor"] = std::string(hexL);
+    char hexESP[12];
+    snprintf(hexESP, sizeof(hexESP), "#%08X", espColor);
+    j["espColor"] = std::string(hexESP);
 }
