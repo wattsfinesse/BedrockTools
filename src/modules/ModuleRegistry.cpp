@@ -44,6 +44,7 @@
 #include "misc/hiveutils.hpp"
 #include "visual/swingmodifier.hpp"
 #include "visual/xray.hpp"
+#include "visual/esp.hpp"
 #include "visual/freelook.hpp"
 
 ModuleRegistry& ModuleRegistry::get() {
@@ -131,6 +132,7 @@ void registerAllModules() {
     registry.emplace<ShulkerPreviewModule>();
     registry.emplace<ConnectedGlassModule>();
     registry.emplace<XrayModule>();
+    registry.emplace<ESPModule>();
     registry.emplace<FreeLookModule>();
     registry.emplace<ForceGlobalRPModule>();
 }
