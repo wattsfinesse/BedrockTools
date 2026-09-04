@@ -53,6 +53,19 @@ static std::string cleanPlayerName(const std::string& input) {
     return output;
 }
 
+// Removes the " §c❤ §f<digits>" suffix appended by the Third Person Nametag
+// "Show Health" option, so the tablist keeps showing plain player names.
+static void stripNametagHealthSuffix(std::string& text) {
+    const std::string marker = " \xC2\xA7" "c" "\xE2\x9D\xA4 \xC2\xA7" "f";
+    const auto pos = text.rfind(marker);
+    if (pos == std::string::npos) return;
+    for (std::size_t i = pos + marker.size(); i < text.size(); ++i) {
+        const char c = text[i];
+        if (c < '0' || c > '9') return;
+    }
+    text.resize(pos);
+}
+
 static const void* getSkinImageFromActor(void* actor) {
     if (!actor) return nullptr;
 
@@ -142,7 +155,9 @@ static std::string getActorName(void* actor) {
     if (!actor) return {};
 
     if (s_actorGetNameTag) {
-        auto name = cleanPlayerName(s_actorGetNameTag(actor));
+        auto raw = s_actorGetNameTag(actor);
+        stripNametagHealthSuffix(raw);
+        auto name = cleanPlayerName(raw);
         if (!name.empty()) return name;
     }
 
