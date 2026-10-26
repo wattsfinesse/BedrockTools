@@ -40,6 +40,7 @@
 #include "visual/cinematiccamera.hpp"
 #include "visual/breadcrumbs.hpp"
 #include "visual/lightoverlay.hpp"
+#include "visual/oreoutline.hpp"
 #include "visual/shulkerpreview.hpp"
 #include "visual/connectedglass.hpp"
 #include "player/skinstealer.hpp"
@@ -132,6 +133,7 @@ void registerAllModules() {
     registry.emplace<HiveUtilsModule>();
     registry.emplace<FPSUnlockerModule>();
     registry.emplace<LightOverlayModule>();
+    registry.emplace<OreOutlineModule>();
     registry.emplace<ShulkerPreviewModule>();
     registry.emplace<ConnectedGlassModule>();
     registry.emplace<ForceGlobalRPModule>();
