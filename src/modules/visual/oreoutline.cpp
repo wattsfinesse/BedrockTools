@@ -1,4 +1,5 @@
 #include "oreoutline.hpp"
+#include <GLES3/gl3.h>
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
@@ -95,7 +96,13 @@ void renderHook(void* self, void* screenContext, void* a3) {
     bool any=false; for(const auto& batch:batches) if(!batch.empty()){any=true;break;} if(!any) return;
     uintptr_t ch=*(uintptr_t*)((uintptr_t)screenContext+bedrocktools::sdk::offsets::ScreenContext::mColorHolder); float saved[4]{}; float* holder=nullptr;
     if(ch&&ch>=0x1000){holder=(float*)ch;std::copy(holder,holder+4,saved);std::fill(holder,holder+4,1.f);}
+    // This hook runs on the active world-render thread. Disable only depth testing
+    // while submitting our line batches so terrain cannot occlude ore outlines.
+    // Restore the previous GL state immediately afterwards to avoid affecting the HUD.
+    const GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
+    glDisable(GL_DEPTH_TEST);
     for(size_t i=0;i<batches.size();++i){auto& batch=batches[i];if(batch.empty())continue;auto col=colors[i];colorFn(tess,((col>>16)&255)/255.f,((col>>8)&255)/255.f,(col&255)/255.f,((col>>24)&255)/255.f);beginFn(tess,nullptr,4,(int)batch.size(),0);for(auto& v:batch)vertexFn(tess,v.x,v.y,v.z);char pad[0x58]{};renderFn(screenContext,tess,mat,pad);}
+    if(depthWasEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
     if(holder)std::copy(saved,saved+4,holder);
 }
 void tick(void* player){g_player=player;if(!player)return;uintptr_t sv=*(uintptr_t*)((uintptr_t)player+bedrocktools::sdk::offsets::Actor::mStateVectorComponent);if(sv)g_pos=*(bedrocktools::sdk::Vec3*)sv;}
