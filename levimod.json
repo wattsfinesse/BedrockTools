@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
-  "id": "bedrocktools",
+  "id": "watts_ore_outline",
   "version": "1.5.6",
   "minecraft_versions": [
     "1.26.5X.X"
   ],
   "info": {
-    "name": "BedrockTools",
-    "author": "MrPokeG",
-    "description": "A collection of utility, HUD, player, and visual modules for Minecraft Bedrock.",
+    "name": "Watts Ore Outline",
+    "author": "Watts",
+    "description": "ARM64 native ore-outline module for LeviLauncher Minecraft Bedrock. Source based on BedrockTools.",
     "homepage_url": "https://github.com/QYCottage/BedrockTools",
     "icon": "assets/bedrocktools.png",
     "tags": [
@@ -23,8 +23,8 @@
       "*.so"
     ],
     "labels": {
-      "BedrockTools.levipack": "LeviPack",
-      "libBedrockTools.so": "Native library"
+      "WattsOreOutline.levipack": "LeviPack",
+      "libWattsOreOutline.so": "Native library"
     }
   }
 }
