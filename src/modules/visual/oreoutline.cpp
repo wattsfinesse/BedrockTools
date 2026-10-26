@@ -24,6 +24,13 @@ using GetBlockFn = void*(*)(void*, const BlockPos&);
 struct HashedString { uint64_t hash; std::string value; mutable const HashedString* last; };
 struct MaterialPtr { void* data[2]{nullptr,nullptr}; explicit operator bool() const { return data[0] != nullptr; } };
 
+// SAFETY GATE: RenderLevel's complete 1.26.52 ABI has not been verified.
+// The previous detour forwarded only three arguments to the original method,
+// despite the target signature using additional arguments. Installing it can
+// crash during early rendering (before the Mojang logo). Keep the feature off
+// until the exact signature and calling convention are confirmed.
+constexpr bool kRenderLevelHookAbiVerified = false;
+
 OreOutlineModule* g_module = nullptr;
 void* g_player = nullptr;
 bedrocktools::sdk::Vec3 g_pos{};
@@ -108,10 +115,33 @@ void renderHook(void* self, void* screenContext, void* a3) {
 void tick(void* player){g_player=player;if(!player)return;uintptr_t sv=*(uintptr_t*)((uintptr_t)player+bedrocktools::sdk::offsets::Actor::mStateVectorComponent);if(sv)g_pos=*(bedrocktools::sdk::Vec3*)sv;}
 }
 
-OreOutlineModule::OreOutlineModule():Module("Ore Outline","Draws colored wireframe outlines around nearby ores through terrain." ){showInMenu=true;g_module=this;}
+OreOutlineModule::OreOutlineModule():Module("Ore Outline","Temporarily disabled while the Minecraft 1.26.52 RenderLevel hook ABI is verified; this prevents an early-launch crash." ){showInMenu=true;g_module=this;}
 OreOutlineModule::~OreOutlineModule(){if(g_module==this)g_module=nullptr;}
-void OreOutlineModule::onInit(){m_patchTarget=(void*)bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::RenderLevel);beginFn=(BeginFn)bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::TessellatorBegin);colorFn=(ColorFn)bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::TessellatorColor);vertexFn=(VertexFn)bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::TessellatorVertex);renderFn=(RenderFn)bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::MeshHelpersRenderMeshImmediately2);if(!renderFn)renderFn=(RenderFn)bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::MeshHelpersRenderMeshImmediately);getBlockFn=(GetBlockFn)bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceGetBlock);uintptr_t rg=bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::RenderMaterialGroupCommon);if(rg){uintptr_t group=resolveADRP((uint32_t*)rg,2,0);if(group)materialGroup=group+bedrocktools::sdk::offsets::MaterialGroup::mRenderMaterialGroupOffset;}bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& e){tick(e.player);});}
-void OreOutlineModule::applyPatch(){if(m_patched||!m_patchTarget)return;bedrocktools::hooks::install(m_patchTarget,(void*)renderHook,&originalRenderLevel);m_patched=true;}
+void OreOutlineModule::onInit(){
+    // Do not resolve or install the experimental renderer hook until its full
+    // function ABI is verified against the target Minecraft build.
+    if constexpr (!kRenderLevelHookAbiVerified) return;
+
+    m_patchTarget=(void*)bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::RenderLevel);
+    beginFn=(BeginFn)bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::TessellatorBegin);
+    colorFn=(ColorFn)bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::TessellatorColor);
+    vertexFn=(VertexFn)bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::TessellatorVertex);
+    renderFn=(RenderFn)bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::MeshHelpersRenderMeshImmediately2);
+    if(!renderFn) renderFn=(RenderFn)bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::MeshHelpersRenderMeshImmediately);
+    getBlockFn=(GetBlockFn)bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceGetBlock);
+    uintptr_t rg=bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::RenderMaterialGroupCommon);
+    if(rg){uintptr_t group=resolveADRP((uint32_t*)rg,2,0);if(group)materialGroup=group+bedrocktools::sdk::offsets::MaterialGroup::mRenderMaterialGroupOffset;}
+    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& e){tick(e.player);});
+}
+void OreOutlineModule::applyPatch(){
+    // Fail closed: hooking RenderLevel with an unverified ABI can crash the
+    // game during startup. This remains disabled until the hook is corrected.
+    if constexpr (!kRenderLevelHookAbiVerified) return;
+    if(m_patched||!m_patchTarget)return;
+    auto handle=bedrocktools::hooks::install(m_patchTarget,(void*)renderHook,&originalRenderLevel);
+    if(!handle || !originalRenderLevel) return;
+    m_patched=true;
+}
 void OreOutlineModule::onEnable(){applyPatch();}
 void OreOutlineModule::onDisable(){}
 void OreOutlineModule::loadConfig(const nlohmann::json& j){Module::loadConfig(j);radius=j.value("radius",radius);}
